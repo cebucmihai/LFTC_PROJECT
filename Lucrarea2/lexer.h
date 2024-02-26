@@ -16,8 +16,8 @@ enum {
     CHAR,
     DOUBLE,
     STRING,
-    SPACE,  // Tipuri noi
-    LINECOMMENT,  // Tipuri noi
+    SPACE,
+    LINECOMMENT,  
     COMMA,
     SEMICOLON,
     LPAR,
