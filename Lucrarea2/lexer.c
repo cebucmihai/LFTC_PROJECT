@@ -72,6 +72,8 @@ Token *tokenize(const char *pch){
             case ')': addTk(RPAR); pch++; break;
             case '{': addTk(LACC); pch++; break;
             case '}': addTk(RACC); pch++; break;
+            case '[': addTk(LBRACKET); pch++; break;
+            case ']': addTk(RBRACKET); pch++; break;
             case ';': addTk(SEMICOLON); pch++; break;
             case '+': addTk(ADD); pch++; break;
             case '-': addTk(SUB); pch++; break;
