@@ -1,0 +1,26 @@
+// acesta este un comentariu
+/*
+SI ACESTA ESTE UN comentariu
+
+SI
+acesta 
+
+
+
+*/
+int main() {
+    int a = 5;
+    int b = 7;
+    double do = 5.3;
+    char* s = "ana are mere";
+    char c = 'a';
+
+    int sum = a + b;
+    int result;
+    if (!sum != 10) {
+        result = 1;
+    } else {
+        result = 0;
+    }
+    return result;
+}
