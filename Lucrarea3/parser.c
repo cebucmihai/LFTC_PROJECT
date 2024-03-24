@@ -43,7 +43,7 @@ bool typeBase() {
         if (consume(ID)) {
             return true;
         } else {
-            tkerr("Lipseste identificatorul structurii dupa 'struct'");
+            tkerr("Lipseste numele structurii dupa identificatorul 'struct'");
         }
     }
     iTk = start; // Revenim la pozitia initiala
@@ -81,7 +81,7 @@ bool varDef() {
                 tkerr("Lipseste punctul si virgula ';' dupa declaratia variabilei");
             }
         } else {
-            tkerr("Se asteapta un identificator dupa specificatorul de tip");
+            tkerr("Lipseste numele variabilei");
         }
     }
     iTk = start; // Revenim la pozitia initiala
@@ -98,10 +98,16 @@ bool structDef() {
                 if (consume(RACC)) {
                     if (consume(SEMICOLON)) {
                         return true;
+                    } else {
+						tkerr("Lipseste ';' dupa definerea structurii");
                     } 
-                }
+                }else {
+					tkerr("Lipseste '}' la finalul structurii");
+				}
             }
-        }
+        }else {
+			tkerr("Lipseste numele structurii");
+		}
     }
     iTk = start; // Revenim la pozitia initiala
     return false;
@@ -114,7 +120,9 @@ bool fnParam() {
         if (consume(ID)) {
             if (arrayDecl()) {}
             return true;
-        }
+        }else {
+			tkerr("Lipseste numele parametrului");
+		}
     }
     iTk = start; // Revenim la pozitia initiala
     return false;
@@ -197,6 +205,7 @@ bool stm() {
         } else {
             tkerr("Lipseste paranteza stanga '(' in instructiunea 'if'");
         }
+        iTk = start;
     }
     if (consume(WHILE)) {
         if (consume(LPAR)) {
@@ -216,6 +225,7 @@ bool stm() {
         } else {
             tkerr("Lipseste paranteza stanga '(' in bucla 'while'");
         }
+        iTk = start;
     }
     if (consume(RETURN)) {
         if (expr()) {}
@@ -224,20 +234,13 @@ bool stm() {
         } else {
             tkerr("Lipseste punctul si virgula ';' dupa instructiunea return");
         }
+        iTk = start;
     }
-    if (expr()) {
-        if (consume(SEMICOLON)) {
-            return true;
-        } else {
-            tkerr("Lipseste punctul si virgula ';' dupa expresie");
-        }
-    } else {
-        if (consume(SEMICOLON)) {
-            return true;
-        } else {
-            tkerr("Lipseste punctul si virgula ';' dupa instructiunea goala");
-        }
-    }
+    if (expr()) {} 
+    if (consume(SEMICOLON)) {
+        return true;
+    } 
+    
     iTk = start; // Revenim la pozitia initiala
     return false;
 }
@@ -263,6 +266,7 @@ bool exprAssign() {
                 tkerr("Eroare de sintaxa in expresia de atribuire");
             }
         }
+        iTk = start;
     }
     if (exprOr()) {
         return true;
@@ -280,6 +284,7 @@ bool exprUnary() {
         } else {
             tkerr("Eroare de sintaxa in expresia unara");
         }
+        iTk = start;
     }
     if (exprPostfix()) {
         return true;
@@ -302,6 +307,7 @@ bool exprPostfix() {
 // | DOT ID postfixPrim
 // | ε
 bool exprPostfixPrim() {
+    Token *start = iTk;
     if (consume(LBRACKET)) {
         if (expr()) {
             if (consume(RBRACKET)) {
@@ -314,6 +320,7 @@ bool exprPostfixPrim() {
         } else {
             tkerr("Eroare de sintaxa in expresia intre paranteze in expresia postfixata");
         }
+        iTk = start;
     }
 
     if (consume(DOT)) {
@@ -322,6 +329,7 @@ bool exprPostfixPrim() {
                 return true;
             }
         }
+        iTk = start;
     }
     return true;
 }
@@ -330,15 +338,11 @@ bool exprPostfixPrim() {
 bool exprPrimary() {
     Token *start = iTk; // Salvam pozitia curenta
     if (consume(ID)) {
-        printf("LINE : %d \n", iTk->line);
         if (consume(LPAR)) {
-            printf("LINE : %d \n", iTk->line);
             if (expr()) {
-                for (;;) {
-                    if (consume(COMMA)) {
-                        if (expr()) {} 
+                while(consume(COMMA)){
+                     if (expr()) {} 
                         else return false;
-                    }
                 }
                 if (consume(RPAR)) {}
                 else return false;
@@ -362,8 +366,12 @@ bool exprPrimary() {
         if (expr()) {
             if (consume(RPAR)) {
                 return true;
-            }
-        }
+            }else {
+				tkerr("Lipseste ')' la finalul expresiei");
+			}
+        }else {
+			tkerr("Lipseste expresia");
+		}
     }
     iTk = start; // Revenim la pozitia initiala
     return false;
@@ -379,6 +387,7 @@ bool exprCast() {
                 return exprCast();
             }
         }
+        iTk = start;
     }
     if (exprUnary()) {
         return true;
@@ -537,5 +546,5 @@ bool unit() {
 
 void parse(Token *tokens) {
     iTk = tokens;
-    if (!unit()) tkerr("Eroare de sintaxa in unitate");
+    if (!unit()) {}
 }

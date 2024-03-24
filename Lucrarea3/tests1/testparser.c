@@ -1,11 +1,11 @@
 struct Pt{
 	int x;
 	int y;
-	};
+};
 struct Pt points[10];
 
 double max(double a,double b){
-	if(4>5)return a;
+	if(a>b)return a;
 		else return b;
 	}
 
@@ -14,7 +14,7 @@ int len(char s[]){
 	i=0;
 	while(s[i])i=i+1;
 	return i;
-	}
+}
 
 void main(){
 	int i;
@@ -22,6 +22,5 @@ void main(){
 	while(i!=0){
 		puti(i);
 		i=i/2;
-		}
 	}
-	
+}
