@@ -174,6 +174,9 @@ Token *tokenize(const char *pch){
                     int hasExp = 0;
                     for (start = pch; isdigit(*pch) || *pch == '.' || *pch == 'e' || *pch == 'E' || *pch == '+' || *pch == '-'; pch++) {
                         if (*pch == '.') {
+                            if(*pch == '.' && !isdigit(*(pch+1))){
+                                err("invalid number");
+                            }
                             if (hasDot || hasExp) {
                                 err("invalid number");
                             }
