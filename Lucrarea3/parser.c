@@ -137,7 +137,7 @@ bool fnDef() {
                 if (fnParam()) {
                     while (consume(COMMA)) {
                         if (!fnParam()) {
-                            tkerr("Eroare de sintaxa in parametrii functiei");
+                            tkerr("Lipseste parametrul functiei dupa ,");
                         }
                     }
                 }
@@ -148,12 +148,12 @@ bool fnDef() {
                         tkerr("Lipseste corpul functiei dupa parametrii");
                     }
                 } else {
-                    tkerr("Lipseste paranteza dreapta ')' in declaratia functiei");
+                    tkerr("Lipseste ')' la finalul functiei");
                 }
             } 
             
         } else {
-            tkerr("Se asteapta un identificator dupa tipul functiei");
+            tkerr("Lipseste numele functiei");
         }
     }
     iTk = start; // Revenim la pozitia initiala
@@ -168,7 +168,7 @@ bool stmCompound() {
         if (consume(RACC)) {
             return true;
         } else {
-            tkerr("Lipseste acolada dreapta '}' in instructiunea compusa");
+            tkerr("Lipseste '}' in instructiunea compusa");
         }
     }
     iTk = start; // Revenim la pozitia initiala
@@ -182,50 +182,44 @@ bool stm() {
         return true;
     }
     if (consume(IF)) {
-        if (consume(LPAR)) {
-            if (expr()) {
-                if (consume(RPAR)) {
-                    if (stm()) {
-                        if (consume(ELSE)) {
-                            if (stm()) {}
-                            else {
-                                tkerr("Lipseste ramura 'else' dupa instructiunea 'if'");
-                            }
-                        }
-                        return true;
-                    } else {
-                        tkerr("Lipseste instructiunea in ramura 'if'");
-                    }
-                } else {
-                    tkerr("Lipseste paranteza dreapta ')' in instructiunea 'if'");
-                }
-            } else {
-                tkerr("Lipseste conditia in instructiunea 'if'");
-            }
-        } else {
-            tkerr("Lipseste paranteza stanga '(' in instructiunea 'if'");
-        }
-        iTk = start;
+		if (consume(LPAR)) {
+			if (expr()) {
+				if (consume(RPAR)) {
+					if (stm()) {
+						if (consume(ELSE)) {
+							if (stm()) {}
+							else return false;
+						}
+						return true;
+					}
+				} else {
+					tkerr("Lipseste ')' dupa expresie");
+				}
+			} else {
+				tkerr("Lipseste expresia");
+			} 
+		} else {
+			tkerr("Lipseste '(' inainte de expresie");
+		}
+		iTk = start;
     }
     if (consume(WHILE)) {
-        if (consume(LPAR)) {
-            if (expr()) {
-                if (consume(RPAR)) {
-                    if (stm()) {
-                        return true;
-                    } else {
-                        tkerr("Lipseste instructiunea in bucla 'while'");
-                    }
-                } else {
-                    tkerr("Lipseste paranteza dreapta ')' in bucla 'while'");
-                }
-            } else {
-                tkerr("Lipseste conditia in bucla 'while'");
-            }
-        } else {
-            tkerr("Lipseste paranteza stanga '(' in bucla 'while'");
-        }
-        iTk = start;
+		if (consume(LPAR)) {
+			if (expr()) {
+				if (consume(RPAR)) {
+					if (stm()) {
+						return true;
+					}
+				} else {
+					tkerr("Lipseste ')' dupa expresie");
+				}
+			}  else {
+				tkerr("Lipseste expresia");
+			} 
+		} else {
+			tkerr("Lipseste '(' inainte de expresie");
+		}
+		iTk = start;
     }
     if (consume(RETURN)) {
         if (expr()) {}
@@ -236,11 +230,16 @@ bool stm() {
         }
         iTk = start;
     }
-    if (expr()) {} 
+    if (expr()) {
+		if (consume(SEMICOLON)) {
+			return true;
+		} else {
+			tkerr("Lipseste ';'");
+		}
+	}
     if (consume(SEMICOLON)) {
-        return true;
-    } 
-    
+		return true;
+	}
     iTk = start; // Revenim la pozitia initiala
     return false;
 }
@@ -263,7 +262,7 @@ bool exprAssign() {
             if (exprAssign()) {
                 return true;
             } else {
-                tkerr("Eroare de sintaxa in expresia de atribuire");
+                tkerr("Lipseste expresia dupa semnul =");
             }
         }
         iTk = start;
@@ -277,20 +276,20 @@ bool exprAssign() {
 
 // exprUnary: ( SUB | NOT ) exprUnary | exprPostfix
 bool exprUnary() {
-    Token *start = iTk; // Salvam pozitia curenta
-    if (consume(SUB) || consume(NOT)) {
-        if (exprUnary()) {
-            return true;
-        } else {
-            tkerr("Eroare de sintaxa in expresia unara");
-        }
-        iTk = start;
-    }
-    if (exprPostfix()) {
-        return true;
-    }
-    iTk = start; // Revenim la pozitia initiala
-    return false;
+    Token *start = iTk;
+	if (consume(SUB) || consume(NOT)) {
+		if (exprUnary()) {
+			return true;
+		} else {
+			tkerr("Expresoe invalida dupa '-' sau '!'");
+		}
+		iTk = start;
+	}
+	if (exprPostfix()) {
+		return true;
+	}
+	iTk = start;
+	return false;
 }
 
 // exprPostfix: exprPrimary postfixPrim
@@ -307,93 +306,112 @@ bool exprPostfix() {
 // | DOT ID postfixPrim
 // | ε
 bool exprPostfixPrim() {
-    Token *start = iTk;
+	Token *start = iTk;
     if (consume(LBRACKET)) {
         if (expr()) {
             if (consume(RBRACKET)) {
                 if (exprPostfixPrim()) {
                     return true;
-                }
+                } else {
+					tkerr("Expresie invalida dupa ']'");
+				}
             } else {
-                tkerr("Lipseste paranteza de inchidere ']' in expresia postfixata");
-            }
-        } else {
-            tkerr("Eroare de sintaxa in expresia intre paranteze in expresia postfixata");
+				tkerr("Lipseste ']' dupa expresie");
+			}
         }
-        iTk = start;
+		iTk = start;
     }
 
-    if (consume(DOT)) {
+   if (consume(DOT)) {
         if (consume(ID)) {
             if (exprPostfixPrim()) {
                 return true;
-            }
-        }
-        iTk = start;
+            } else {
+				tkerr("Lipseste expresia dupa nume campului");
+			}
+        } else {
+			tkerr("Lipseste numele campului ce se doreste a fi cautat");
+		}
+		iTk = start;
     }
-    return true;
+
+    return true; // epsilon-ul nostru
 }
 
 // exprPrimary: ID ( LPAR ( expr ( COMMA expr )* )? RPAR )? | INT | DOUBLE | CHAR | STRING | LPAR expr RPAR
 bool exprPrimary() {
-    Token *start = iTk; // Salvam pozitia curenta
-    if (consume(ID)) {
-        if (consume(LPAR)) {
-            if (expr()) {
-                while(consume(COMMA)){
-                     if (expr()) {} 
-                        else return false;
-                }
-                if (consume(RPAR)) {}
-                else return false;
-            }
-        }
-        return true;
-    }
-    if (consume(INT)) {
-        return true;
-    }
-    if (consume(DOUBLE)) {
-        return true;
-    }
-    if (consume(CHAR)) {
-        return true;
-    }
-    if (consume(STRING)) {
-        return true;
-    }
-    if (consume(LPAR)) {
-        if (expr()) {
-            if (consume(RPAR)) {
-                return true;
-            }else {
+    Token *start = iTk;
+	if (consume(ID)) {
+		if (consume(LPAR)) {
+			if (expr()) {
+				for (;;) {
+					if (consume(COMMA)) {
+						if (expr()) {} 
+						else {
+							tkerr("Lipseste expresia dupa ','");
+						};
+					} else break;
+				}
+			}
+			if (consume(RPAR)) {
+				return true;
+			}
+			else {
+				tkerr("Lipseste ')' in apelul functiei");
+			}
+		}
+
+		return true;
+	}
+	if (consume(INT)) {
+		return true;
+	}
+	if (consume(DOUBLE)) {
+		return true;
+	}
+	if (consume(CHAR)) {
+		return true;
+	}
+	if (consume(STRING)) {
+		return true;
+	}
+	if (consume(LPAR)) {
+		if (expr()) {
+			if (consume(RPAR)) {
+				return true;
+			} else {
 				tkerr("Lipseste ')' la finalul expresiei");
 			}
-        }else {
+		} else {
 			tkerr("Lipseste expresia");
 		}
-    }
-    iTk = start; // Revenim la pozitia initiala
-    return false;
+		iTk = start;
+	}
+	iTk = start;
+	return false;
 }
 
 // exprCast: LPAR typeBase arrayDecl? RPAR exprCast | exprUnary
 bool exprCast() {
-    Token *start = iTk; // Salvam pozitia curenta
-    if (consume(LPAR)) {
-        if (typeBase()) {
-            if (arrayDecl()) {}
-            if (consume(RPAR)) {
-                return exprCast();
-            }
-        }
-        iTk = start;
-    }
-    if (exprUnary()) {
-        return true;
-    }
-    iTk = start; // Revenim la pozitia initiala
-    return false;
+    Token *start = iTk;
+	if (consume(LPAR)) {
+		if (typeBase()) {
+			if (arrayDecl()) {}
+			if (consume(RPAR)) {
+				return exprCast();
+			} else {
+				tkerr("Lipseste ')'");
+			}
+		} else {
+			tkerr("Lipseste expresia dupa semnul '}'");
+		}
+		iTk = start;
+	}
+	if (exprUnary()) {
+		return true;
+	}
+	iTk = start;
+	return false;
 }
 
 bool exprMul() {
@@ -406,15 +424,33 @@ bool exprMul() {
 }
 
 bool exprMulPrim() {
-    if (consume(MUL) || consume(DIV)) {
-        if (exprCast()) {
-            if (exprMulPrim()) {
-                return true;
+    switch (iTk->code) {
+        case MUL:
+            consume(MUL);
+            if (exprCast()) {
+                if (exprMulPrim()) {
+                    return true;
+                } 
+            } else {
+                tkerr("Lipseste expresia dupa semnul '*'");
             }
-        }
+            break;
+        case DIV:
+            consume(DIV);
+            if (exprCast()) {
+                if (exprMulPrim()) {
+                    return true;
+                } 
+            } else {
+                tkerr("Lipseste expresia dupa semnul '/'");
+            }
+            break;
+        default:
+            break;
     }
     return true; // epsilon-ul nostru
 }
+
 
 // exprAdd: exprMul exprAddPrim
 bool exprAdd() {
@@ -428,15 +464,33 @@ bool exprAdd() {
 
 // exprAddPrim: ( ADD | SUB ) exprMul exprAddPrim | ε
 bool exprAddPrim() {
-    if (consume(ADD) || consume(SUB)) {
-        if (exprMul()) {
-            if (exprAddPrim()) {
-                return true;
+    switch (iTk->code) {
+        case ADD:
+            consume(ADD);
+            if (exprMul()) {
+                if (exprAddPrim()) {
+                    return true;
+                } 
+            } else {
+                tkerr("Lipseste expresia dupa semnul '+'");
             }
-        }
+            break;
+        case SUB:
+            consume(SUB);
+            if (exprMul()) {
+                if (exprAddPrim()) {
+                    return true;
+                } 
+            } else {
+                tkerr("Lipseste expresia dupa semnul '-'");
+            }
+            break;
+        default:
+            break;
     }
-    return true; // ε
+    return true; // epsilon-ul nostru
 }
+
 
 // exprRel: exprAdd exprRelPrim
 bool exprRel() {
@@ -450,15 +504,54 @@ bool exprRel() {
 
 // exprRelPrim: ( LESS | LESSEQ | GREATER | GREATEREQ ) exprAdd exprRelPrim | ε
 bool exprRelPrim() {
-    if (consume(LESS) || consume(LESSEQ) || consume(GREATER) || consume(GREATEREQ)) {
-        if (exprAdd()) {
-            if (exprRelPrim()) {
-                return true;
+    switch (iTk->code) {
+        case LESS:
+            consume(LESS);
+            if (exprAdd()) {
+                if (exprRelPrim()) {
+                    return true;
+                }
+            } else {
+                tkerr("Lipseste expresia dupa semnul '<'");
             }
-        }
+            break;
+        case LESSEQ:
+            consume(LESSEQ);
+            if (exprAdd()) {
+                if (exprRelPrim()) {
+                    return true;
+                } 
+            } else {
+                tkerr("Lipseste expresia dupa semnul '<='");
+            }
+            break;
+        case GREATER:
+            consume(GREATER);
+            if (exprAdd()) {
+                if (exprRelPrim()) {
+                    return true;
+                } 
+            } else {
+                tkerr("Lipseste expresia dupa semnul '>'");
+            }
+            break;
+        case GREATEREQ:
+            consume(GREATEREQ);
+            if (exprAdd()) {
+                if (exprRelPrim()) {
+                    return true;
+                } 
+            } else {
+                tkerr("Lipseste expresia dupa semnul '>='");
+            }
+            break;
+        default:
+            //tkerr("Se astepta unul dintre semnele '<', '<=', '>', '>='");
+            break;
     }
-    return true; // ε
+    return true; // epsilon-ul nostru
 }
+
 
 // exprEq: exprRel exprEqPrim
 bool exprEq() {
@@ -472,15 +565,33 @@ bool exprEq() {
 
 // exprEqPrim: ( EQUAL | NOTEQ ) exprRel exprEqPrim | ε
 bool exprEqPrim() {
-    if (consume(EQUAL) || consume(NOTEQ)) {
-        if (exprRel()) {
-            if (exprEqPrim()) {
-                return true;
+    switch (iTk->code) {
+        case EQUAL:
+            consume(EQUAL);
+            if (exprRel()) {
+                if (exprEqPrim()) {
+                    return true;
+                } 
+            } else {
+                tkerr("Lipseste expresia dupa '=='");
             }
-        }
+            break;
+        case NOTEQ:
+            consume(NOTEQ);
+            if (exprRel()) {
+                if (exprEqPrim()) {
+                    return true;
+                } 
+            } else {
+                tkerr("Lipseste expresia dupa '!='");
+            }
+            break;
+        default:
+            break;
     }
     return true; // epsilon-ul nostru
 }
+
 
 // exprAnd: exprEq exprAndPrim
 bool exprAnd() {
@@ -499,9 +610,11 @@ bool exprAndPrim() {
             if (exprAndPrim()) {
                 return true;
             }
-        }
+        } else {
+			tkerr("Lipseste expresia dupa semnul '&&'");
+		}
     }
-    return true; //  ε
+    return true; // epsilon-ul nostru
 }
 
 // exprOr: exprAnd exprOrPrim
@@ -519,13 +632,15 @@ bool exprOr() {
 // exprOrPrim: OR exprAnd exprOrPrim | ε
 bool exprOrPrim() { // este recursiva
     if (consume(OR)) {
-        if (exprAnd()) {
-            if (exprOrPrim()) {
-                return true;
-            }
-        }
-    }
-    return true; // ε
+		if(exprAnd()) {
+			if(exprOrPrim()) {
+				return true;
+			}
+		} else {
+			tkerr("Lipseste expresia dupa semnul '||'");
+		}
+	}
+	return true; //epsilon-ul nostru
 }
 
 // unit: ( structDef | fnDef | varDef )* END

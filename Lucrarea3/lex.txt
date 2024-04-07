@@ -30,7 +30,6 @@
 8	LPAR
 8	ID: a
 8	GREATER
-8	ID: b
 8	RPAR
 8	RETURN
 8	ID: a
