@@ -1,0 +1,4 @@
+1. Eliminare recursivitate stanga.
+ - CURS 6 SLIDE 14 
+2. Vom implementa FIRS.
+3. Implementarea mesajelor de eroare.
