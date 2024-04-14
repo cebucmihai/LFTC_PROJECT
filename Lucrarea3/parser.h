@@ -2,16 +2,17 @@
 
 #include "lexer.h"
 #include <stdbool.h>
+#include "ad.h"
 
 void tkerr(const char *fmt,...);
 bool consume(int code);
-bool typeBase();
-bool arrayDecl();
+bool typeBase(Type *t);
+bool arrayDecl(Type *t);
 bool varDef();
 bool structDef();
 bool fnParam();
 bool fnDef();
-bool stmCompound();
+bool stmCompound(bool newDomain);
 bool stm();
 bool expr();
 bool exprAssign();

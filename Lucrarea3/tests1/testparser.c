@@ -5,7 +5,7 @@ struct Pt{
 struct Pt points[10];
 
 double max(double a,double b){
-	if(a>a)return a;
+	if(a>b)return a;
 		else return b;
 	}
 
