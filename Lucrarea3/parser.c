@@ -277,6 +277,7 @@ bool fnDef() {
 bool stmCompound(bool newDomain) {
     Token *start = iTk; // Salvam pozitia curenta
     if (consume(LACC)) {
+        if(newDomain)pushDomain();
         while (varDef() || stm()) {} // Zero sau mai multe varDefs sau instructiuni
         if (consume(RACC)) {
             if(newDomain)dropDomain();
