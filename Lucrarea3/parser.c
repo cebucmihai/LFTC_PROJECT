@@ -8,6 +8,7 @@
 #include "ad.h"
 #include "lexer.h"
 #include "utils.h"
+#include "at.h"
 
 Symbol *owner = NULL;
 
@@ -293,17 +294,23 @@ bool stmCompound(bool newDomain) {
 // stm: stmCompound | IF LPAR expr RPAR stm ( ELSE stm )? | WHILE LPAR expr RPAR stm | RETURN expr? SEMICOLON | expr? SEMICOLON
 bool stm() {
     Token *start = iTk; // Salvam pozitia curenta
+    Ret rCond, rExpr;
     if (stmCompound(true)) {
         return true;
     }
     if (consume(IF)) {
 		if (consume(LPAR)) {
-			if (expr()) {
+			if (expr(&rCond)) {
+                if (!canBeScalar(&rCond)) {
+					tkerr("Conditia if-ului trebuie sa fie scalar");
+				}
 				if (consume(RPAR)) {
 					if (stm()) {
 						if (consume(ELSE)) {
-							if (stm()) {}
-							else return false;
+							if (stm()) {
+								return true;
+							}
+							return false;
 						}
 						return true;
 					}
@@ -320,7 +327,10 @@ bool stm() {
     }
     if (consume(WHILE)) {
 		if (consume(LPAR)) {
-			if (expr()) {
+			if (expr(&rCond)) {
+                if (!canBeScalar(&rCond)) {
+					tkerr("conditia trebuie sa fie scalar");
+				}
 				if (consume(RPAR)) {
 					if (stm()) {
 						return true;
@@ -337,7 +347,21 @@ bool stm() {
 		iTk = start;
     }
     if (consume(RETURN)) {
-        if (expr()) {}
+        if (expr(&rExpr)) {
+            if (owner->type.tb == TB_VOID) {
+				tkerr("Functiile void nu pot returna o valoare");
+			}
+			if (!canBeScalar(&rExpr)) {
+				tkerr("Valoarea returnata trebuie sa fie un scalar");
+			}
+			if (!convTo(&rExpr.type, &owner->type)) {
+				tkerr("Nu se poate converti tipul expresiei la tipul returnat de functie");
+			}
+		} else {
+			if(owner->type.tb != TB_VOID) {
+				tkerr("Functiile non-void trebuie sa aiba o expresie returnata");
+			}
+		}
         if (consume(SEMICOLON)) {
             return true;
         } else {
@@ -345,7 +369,7 @@ bool stm() {
         }
         iTk = start;
     }
-    if (expr()) {
+    if (expr(&rExpr)) {
 		if (consume(SEMICOLON)) {
 			return true;
 		} else {
@@ -360,9 +384,9 @@ bool stm() {
 }
 
 // expr: exprAssign
-bool expr() {
+bool expr(Ret *r) {
     Token *start = iTk; // Salvam pozitia curenta
-    if (exprAssign()) {
+    if (exprAssign(r)) {
         return true;
     }
     iTk = start; // Revenim la pozitia initiala
@@ -370,11 +394,29 @@ bool expr() {
 }
 
 // exprAssign: exprUnary ASSIGN exprAssign | exprOr
-bool exprAssign() {
+bool exprAssign(Ret *r) {
+    Ret rDst;
     Token *start = iTk; // Salvam pozitia curenta
-    if (exprUnary()) {
-        if (consume(ASSIGN)) {
-            if (exprAssign()) {
+    if (exprUnary(&rDst)) {
+		if (consume(ASSIGN)) {
+			if (exprAssign(r)) {
+				if (!rDst.lval) {
+					tkerr("Destinatia trebuie sa fie left-value");
+				}
+				if (rDst.ct) {
+					tkerr("Destinatia nu trebuie sa fie constanta");
+				}
+				if (!canBeScalar(&rDst)) {
+					tkerr("Destinatia trebuie sa fie scalar");
+				}
+				if (!canBeScalar(r)) {
+					tkerr("Sursa trebuie sa fie scalar");
+				}
+				if (!convTo(&r->type,&rDst.type)) {
+					tkerr("Sursa trebuie sa fie convertibila la destinatie");
+				}
+				r->lval = false;
+				r->ct = true;
                 return true;
             } else {
                 tkerr("Lipseste expresia dupa semnul =");
@@ -382,7 +424,7 @@ bool exprAssign() {
         }
         iTk = start;
     }
-    if (exprOr()) {
+    if (exprOr(r)) {
         return true;
     }
     iTk = start; // Revenim la pozitia initiala
@@ -390,17 +432,22 @@ bool exprAssign() {
 }
 
 // exprUnary: ( SUB | NOT ) exprUnary | exprPostfix
-bool exprUnary() {
+bool exprUnary(Ret *r) {
     Token *start = iTk;
 	if (consume(SUB) || consume(NOT)) {
-		if (exprUnary()) {
+		if (exprUnary(r)) {
+			if (!canBeScalar(r)) {
+				tkerr("Minus unar si Not trebuie sa aiba un operand scalar");
+			}
+			r->lval = false;
+			r->ct = true;
 			return true;
 		} else {
-			tkerr("Expresoe invalida dupa '-' sau '!'");
+			tkerr("Expresie invalida dupa '-' sau '!'");
 		}
 		iTk = start;
 	}
-	if (exprPostfix()) {
+	if (exprPostfix(r)) {
 		return true;
 	}
 	iTk = start;
@@ -408,10 +455,10 @@ bool exprUnary() {
 }
 
 // exprPostfix: exprPrimary postfixPrim
-bool exprPostfix() {
+bool exprPostfix(Ret *r) {
     Token *start = iTk; // Salvam pozitia curenta
-    if (exprPrimary()) {
-        return exprPostfixPrim();
+    if (exprPrimary(r)) {
+        return exprPostfixPrim(r);
     }
     iTk = start; // Revenim la pozitia initiala
     return false;
@@ -420,12 +467,23 @@ bool exprPostfix() {
 // postfixPrim = LBRACKET expr RBRACKET postfixPrim
 // | DOT ID postfixPrim
 // | ε
-bool exprPostfixPrim() {
+bool exprPostfixPrim(Ret *r) {
 	Token *start = iTk;
     if (consume(LBRACKET)) {
-        if (expr()) {
+        Ret idx;
+        if (expr(&idx)) {
             if (consume(RBRACKET)) {
-                if (exprPostfixPrim()) {
+                if (r->type.n < 0) {
+					tkerr("Doar un array poate fi indexat");
+				}
+				Type tInt = {TB_INT,NULL,-1};
+                if (!convTo(&idx.type, &tInt)) {
+					tkerr("Indexul in array trebuie sa fie convertibil la int");
+				}
+				r->type.n = -1;
+                r->lval = true;
+                r->ct = false;
+                if (exprPostfixPrim(r)) {
                     return true;
                 } else {
 					tkerr("Expresie invalida dupa ']'");
@@ -439,7 +497,16 @@ bool exprPostfixPrim() {
 
    if (consume(DOT)) {
         if (consume(ID)) {
-            if (exprPostfixPrim()) {
+			Token *tkName = consumedTk;
+            if (r->type.tb != TB_STRUCT) {
+				tkerr("Operatorul de selectie a unui camp de structura se poate aplica doar structurilor");
+			}
+			Symbol *s = findSymbolInList(r->type.s->structMembers, tkName->text);
+            if (!s) {
+				tkerr("Structura %s nu are un camp %s",r->type.s->name,tkName->text);
+			}
+			*r = (Ret){s->type,true,s->type.n>=0};
+            if (exprPostfixPrim(r)) {
                 return true;
             } else {
 				tkerr("Lipseste expresia dupa nume campului");
@@ -454,14 +521,37 @@ bool exprPostfixPrim() {
 }
 
 // exprPrimary: ID ( LPAR ( expr ( COMMA expr )* )? RPAR )? | INT | DOUBLE | CHAR | STRING | LPAR expr RPAR
-bool exprPrimary() {
-    Token *start = iTk;
+bool exprPrimary(Ret *r) {
+   Token *start = iTk;
 	if (consume(ID)) {
+		Token *tkName = consumedTk;
+		Symbol *s = findSymbol(tkName->text);
+		if (!s) {
+			tkerr("ID-ul este nedefinit: %s", tkName->text);
+		}
 		if (consume(LPAR)) {
-			if (expr()) {
+			if(s->kind!=SK_FN)tkerr("Doar functiile pot fi apelate");
+			Ret rArg;
+			Symbol *param=s->fn.params;
+			if (expr(&rArg)) {
+				if (!param) {
+					tkerr("Apelul unei functii trebuie sa aiba acelasi numar de argumente ca si numarul de parametri de la definitia ei");
+				}
+				if (!convTo(&rArg.type, &param->type)) {
+					tkerr("Tipurile argumentelor de la apelul unei functii trebuie sa fie convertibile la tipurile parametrilor functiei");
+				}
+				param=param->next;
 				for (;;) {
 					if (consume(COMMA)) {
-						if (expr()) {} 
+						if (expr(&rArg)) {
+							if (!param) {
+								tkerr("Apelul unei functii trebuie sa aiba acelasi numar de argumente ca si numarul de parametri de la definitia ei");
+							}
+							if (!convTo(&rArg.type, &param->type)) {
+								tkerr("Tipurile argumentelor de la apelul unei functii trebuie sa fie convertibile la tipurile parametrilor functiei");
+							}
+							param=param->next;
+						} 
 						else {
 							tkerr("Lipseste expresia dupa ','");
 						};
@@ -469,29 +559,43 @@ bool exprPrimary() {
 				}
 			}
 			if (consume(RPAR)) {
-				return true;
-			}
-			else {
+				if (param) {
+					tkerr("Apelul unei functii trebuie sa aiba acelasi numar de argumente ca si numarul de parametri de la definitia ei");
+				}
+				*r = (Ret){s->type,false,true};
+			} else {
+				if (s->kind == SK_FN) {
+					tkerr("O functie poate fi doar apelata");
+				}
+				*r = (Ret){s->type,true,s->type.n>=0};
 				tkerr("Lipseste ')' in apelul functiei");
 			}
-		}
-
+        }   else {
+			if(s->kind==SK_FN) {
+				tkerr("O functie poate fi doar apelata"); 
+			}
+			*r = (Ret){s->type,true,s->type.n>=0};
+		} 
 		return true;
 	}
 	if (consume(INT)) {
+		*r = (Ret){{TB_INT,NULL,-1},false,true};
 		return true;
 	}
 	if (consume(DOUBLE)) {
+		*r = (Ret){{TB_DOUBLE,NULL,-1},false,true};
 		return true;
 	}
 	if (consume(CHAR)) {
+		*r = (Ret){{TB_CHAR,NULL,-1},false,true};
 		return true;
 	}
 	if (consume(STRING)) {
+		*r = (Ret){{TB_CHAR,NULL,0},false,true};
 		return true;
 	}
 	if (consume(LPAR)) {
-		if (expr()) {
+		if (expr(r)) {
 			if (consume(RPAR)) {
 				return true;
 			} else {
@@ -507,14 +611,32 @@ bool exprPrimary() {
 }
 
 // exprCast: LPAR typeBase arrayDecl? RPAR exprCast | exprUnary
-bool exprCast() {
-    Type t;
+bool exprCast(Ret *r) {
     Token *start = iTk;
 	if (consume(LPAR)) {
+        Type t;
+        Ret op;
 		if (typeBase(&t)) {
 			if (arrayDecl(&t)) {}
 			if (consume(RPAR)) {
-				return exprCast();
+				if(exprCast(&op)) {
+					if (t.tb == TB_STRUCT) {
+						tkerr("Tipul la care se converteste nu poate fi structura"); 
+					}
+					if (op.type.tb == TB_STRUCT) {
+						tkerr("Structurile nu se pot converti");
+					} 
+					if (op.type.n >= 0 && t.n < 0) {
+						tkerr(" Un array se poate converti doar la alt array"); 
+					}
+					if (op.type.n < 0 && t.n >= 0) {
+						tkerr("Un scalar se poate converti doar la alt scalar"); 
+					}
+					*r = (Ret){t,false,true};
+					return true;
+				} else {
+					tkerr("Lipseste expresia de la Type Cast");
+				}
 			} else {
 				tkerr("Lipseste ')'");
 			}
@@ -523,28 +645,34 @@ bool exprCast() {
 		}
 		iTk = start;
 	}
-	if (exprUnary()) {
+	if (exprUnary(r)) {
 		return true;
 	}
 	iTk = start;
 	return false;
 }
 
-bool exprMul() {
+bool exprMul(Ret *r) {
     Token *start = iTk; // Salvam pozitia curenta
-    if (exprCast()) {
-        return exprMulPrim();
+    if (exprCast(r)) {
+        return exprMulPrim(r);
     }
     iTk = start; // Revenim la pozitia initiala
     return false;
 }
 
-bool exprMulPrim() {
+bool exprMulPrim(Ret *r) {
+    Ret right;
     switch (iTk->code) {
         case MUL:
             consume(MUL);
-            if (exprCast()) {
-                if (exprMulPrim()) {
+            if (exprCast(&right)) {
+			    Type tDst;
+                 if (!arithTypeTo(&r->type, &right.type, &tDst)) {
+				    tkerr("Ambii operanzi trebuie sa fie scalari si sa nu fie structuri in operatia '*'");
+			    }
+			    *r = (Ret){tDst,false,true};
+                if (exprMulPrim(r)) {
                     return true;
                 } 
             } else {
@@ -553,8 +681,13 @@ bool exprMulPrim() {
             break;
         case DIV:
             consume(DIV);
-            if (exprCast()) {
-                if (exprMulPrim()) {
+             if (exprCast(&right)) {
+			    Type tDst;
+                 if (!arithTypeTo(&r->type, &right.type, &tDst)) {
+				    tkerr("Ambii operanzi trebuie sa fie scalari si sa nu fie structuri in operatia '/'");
+			    }
+			    *r = (Ret){tDst,false,true};
+                if (exprMulPrim(r)) {
                     return true;
                 } 
             } else {
@@ -569,22 +702,28 @@ bool exprMulPrim() {
 
 
 // exprAdd: exprMul exprAddPrim
-bool exprAdd() {
+bool exprAdd(Ret *r) {
     Token *start = iTk; // Salvam pozitia curenta
-    if (exprMul()) {
-        return exprAddPrim();
+    if (exprMul(r)) {
+        return exprAddPrim(r);
     }
     iTk = start; // Revenim la pozitia initiala
     return false;
 }
 
 // exprAddPrim: ( ADD | SUB ) exprMul exprAddPrim | ε
-bool exprAddPrim() {
+bool exprAddPrim(Ret *r) {
+    Ret right;
     switch (iTk->code) {
         case ADD:
             consume(ADD);
-            if (exprMul()) {
-                if (exprAddPrim()) {
+            if (exprMul(&right)) {
+			    Type tDst;
+                if (!arithTypeTo(&r->type, &right.type, &tDst)) {
+				    tkerr("Ambii operanzi trebuie sa fie scalari si sa nu fie structuri in operatia '+'");
+			    }
+			    *r = (Ret){tDst,false,true};
+                if (exprAddPrim(r)) {
                     return true;
                 } 
             } else {
@@ -593,8 +732,13 @@ bool exprAddPrim() {
             break;
         case SUB:
             consume(SUB);
-            if (exprMul()) {
-                if (exprAddPrim()) {
+             if (exprMul(&right)) {
+			    Type tDst;
+                if (!arithTypeTo(&r->type, &right.type, &tDst)) {
+				    tkerr("Ambii operanzi trebuie sa fie scalari si sa nu fie structuri in operatia '-'");
+			    }
+			    *r = (Ret){tDst,false,true};
+                if (exprAddPrim(r)) {
                     return true;
                 } 
             } else {
@@ -609,22 +753,28 @@ bool exprAddPrim() {
 
 
 // exprRel: exprAdd exprRelPrim
-bool exprRel() {
+bool exprRel(Ret *r) {
     Token *start = iTk; // Salvam pozitia curenta
-    if (exprAdd()) {
-        return exprRelPrim();
+    if (exprAdd(r)) {
+        return exprRelPrim(r);
     }
     iTk = start; // Revenim la pozitia initiala
     return false;
 }
 
 // exprRelPrim: ( LESS | LESSEQ | GREATER | GREATEREQ ) exprAdd exprRelPrim | ε
-bool exprRelPrim() {
+bool exprRelPrim(Ret *r) {
+    Ret right;
     switch (iTk->code) {
         case LESS:
             consume(LESS);
-            if (exprAdd()) {
-                if (exprRelPrim()) {
+		    if (exprAdd(&right)) {
+			    Type tDst;
+                 if (!arithTypeTo(&r->type, &right.type, &tDst)) {
+				    tkerr("Ambii operanzi trebuie sa fie scalari si sa nu fie structuri in operatia '<'");
+			    }
+			    *r = (Ret){{TB_INT,NULL,-1},false,true};
+                if (exprRelPrim(r)) {
                     return true;
                 }
             } else {
@@ -633,8 +783,13 @@ bool exprRelPrim() {
             break;
         case LESSEQ:
             consume(LESSEQ);
-            if (exprAdd()) {
-                if (exprRelPrim()) {
+            if (exprAdd(&right)) {
+			    Type tDst;
+                 if (!arithTypeTo(&r->type, &right.type, &tDst)) {
+				    tkerr("Ambii operanzi trebuie sa fie scalari si sa nu fie structuri in operatia '<='");
+			    }
+			    *r = (Ret){{TB_INT,NULL,-1},false,true};
+                if (exprRelPrim(r)) {
                     return true;
                 } 
             } else {
@@ -643,8 +798,13 @@ bool exprRelPrim() {
             break;
         case GREATER:
             consume(GREATER);
-            if (exprAdd()) {
-                if (exprRelPrim()) {
+             if (exprAdd(&right)) {
+			    Type tDst;
+                 if (!arithTypeTo(&r->type, &right.type, &tDst)) {
+				    tkerr("Ambii operanzi trebuie sa fie scalari si sa nu fie structuri in operatia '>'");
+			    }
+			    *r = (Ret){{TB_INT,NULL,-1},false,true};
+                if (exprRelPrim(r)) {
                     return true;
                 } 
             } else {
@@ -653,8 +813,13 @@ bool exprRelPrim() {
             break;
         case GREATEREQ:
             consume(GREATEREQ);
-            if (exprAdd()) {
-                if (exprRelPrim()) {
+             if (exprAdd(&right)) {
+			    Type tDst;
+                 if (!arithTypeTo(&r->type, &right.type, &tDst)) {
+				    tkerr("Ambii operanzi trebuie sa fie scalari si sa nu fie structuri in operatia '>='");
+			    }
+			    *r = (Ret){{TB_INT,NULL,-1},false,true};
+                if (exprRelPrim(r)) {
                     return true;
                 } 
             } else {
@@ -670,22 +835,28 @@ bool exprRelPrim() {
 
 
 // exprEq: exprRel exprEqPrim
-bool exprEq() {
+bool exprEq(Ret *r) {
     Token *start = iTk; // Salvam pozitia curenta
-    if (exprRel()) {
-        return exprEqPrim();
+    if (exprRel(r)) {
+        return exprEqPrim(r);
     }
     iTk = start; // Revenim la pozitia initiala
     return false;
 }
 
 // exprEqPrim: ( EQUAL | NOTEQ ) exprRel exprEqPrim | ε
-bool exprEqPrim() {
+bool exprEqPrim(Ret *r) {
+    Ret right;
     switch (iTk->code) {
         case EQUAL:
             consume(EQUAL);
-            if (exprRel()) {
-                if (exprEqPrim()) {
+            if (exprRel(&right)) {
+			    Type tDst;
+                 if (!arithTypeTo(&r->type, &right.type, &tDst)) {
+				    tkerr("Ambii operanzi trebuie sa fie scalari si sa nu fie structuri in operatia '=='");
+			    }
+			    *r = (Ret){{TB_INT,NULL,-1},false,true};
+                if (exprEqPrim(r)) {
                     return true;
                 } 
             } else {
@@ -694,11 +865,16 @@ bool exprEqPrim() {
             break;
         case NOTEQ:
             consume(NOTEQ);
-            if (exprRel()) {
-                if (exprEqPrim()) {
+            if (exprRel(&right)) {
+			    Type tDst;
+                 if (!arithTypeTo(&r->type, &right.type, &tDst)) {
+				    tkerr("Ambii operanzi trebuie sa fie scalari si sa nu fie structuri in operatia '!='");
+			    }
+			    *r = (Ret){{TB_INT,NULL,-1},false,true};
+                if (exprEqPrim(r)) {
                     return true;
                 } 
-            } else {
+            } else{
                 tkerr("Lipseste expresia dupa '!='");
             }
             break;
@@ -710,20 +886,26 @@ bool exprEqPrim() {
 
 
 // exprAnd: exprEq exprAndPrim
-bool exprAnd() {
+bool exprAnd(Ret *r) {
     Token *start = iTk; // Salvam pozitia curenta
-    if (exprEq()) {
-        return exprAndPrim();
+    if (exprEq(r)) {
+        return exprAndPrim(r);
     }
     iTk = start; // Revenim la pozitia initiala
     return false;
 }
 
 // exprAndPrim: AND exprEq exprAndPrim | ε
-bool exprAndPrim() {
+bool exprAndPrim(Ret *r) {
     if (consume(AND)) {
-        if (exprEq()) {
-            if (exprAndPrim()) {
+        Ret right;
+        if (exprEq(&right)) {
+			Type tDst;
+			if (!arithTypeTo(&r->type, &right.type, &tDst)) {
+				tkerr("Ambii operanzi trebuie sa fie scalari si sa nu fie structuri in operatia '&&'");
+			}
+			*r = (Ret){{TB_INT,NULL,-1},false,true};
+            if (exprAndPrim(r)) {
                 return true;
             }
         } else {
@@ -734,10 +916,10 @@ bool exprAndPrim() {
 }
 
 // exprOr: exprAnd exprOrPrim
-bool exprOr() {
+bool exprOr(Ret *r) {
     Token *start = iTk; // Salvam pozitia curenta
-    if (exprAnd()) {
-        if (exprOrPrim()) {
+    if (exprAnd(r)) {
+        if (exprOrPrim(r)) {
             return true; // am ajuns la capatul regulii
         }
     }
@@ -746,10 +928,16 @@ bool exprOr() {
 }
 
 // exprOrPrim: OR exprAnd exprOrPrim | ε
-bool exprOrPrim() { // este recursiva
+bool exprOrPrim(Ret *r) { // este recursiva
     if (consume(OR)) {
-		if(exprAnd()) {
-			if(exprOrPrim()) {
+		Ret right;
+		if(exprAnd(&right)) {
+			Type tDst;
+			if (!arithTypeTo(&r->type, &right.type, &tDst)) {
+				tkerr("Ambii operanzi trebuie sa fie scalari si sa nu fie structuri in operatia '||'");
+			}
+			*r = (Ret){{TB_INT,NULL,-1},false,true};
+			if(exprOrPrim(r)) {
 				return true;
 			}
 		} else {

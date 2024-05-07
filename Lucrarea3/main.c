@@ -6,7 +6,7 @@
 #include "ad.h"
 
 int main() {
-    char *input = loadFile("tests/testad.c");
+    char *input = loadFile("tests/testat.c");
     Token *tokenList = tokenize(input);
     showTokens(tokenList);
     free(input);

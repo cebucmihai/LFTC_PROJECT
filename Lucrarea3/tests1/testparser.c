@@ -18,6 +18,7 @@ int len(char s[]){
 
 void main(){
 	int i;
+	int i;
 	i=10;
 	while(i!=0){
 		puti(i);
