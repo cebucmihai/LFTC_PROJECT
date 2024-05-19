@@ -12,7 +12,7 @@ void f(char text[],int i,char ch){
 
 int h(int x,int y){
 	if(x>0&&x<y){
-		f(v[x].text,y,'#');
+		f("gs",y,'#');
 		return 1;
 		}
 	return 0;

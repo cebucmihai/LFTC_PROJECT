@@ -4,6 +4,7 @@
 #include "utils.h"
 #include "parser.h"
 #include "ad.h"
+#include "vm.h"
 
 int main() {
     char *input = loadFile("tests/testat.c");
@@ -11,8 +12,11 @@ int main() {
     showTokens(tokenList);
     free(input);
     pushDomain();
+    vmInit(); 
     parse(tokenList);
-    showDomain(symTable,"global");
+    Instr *testCode = temaMasinaVirtuala();
+    run(testCode);
+    //showDomain(symTable,"global");
     dropDomain();
     return 0;
 }
