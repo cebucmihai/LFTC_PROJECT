@@ -7,16 +7,24 @@
 #include "vm.h"
 
 int main() {
-    char *input = loadFile("tests/testat.c");
+    char *input = loadFile("tests/testgc.c");
     Token *tokenList = tokenize(input);
     showTokens(tokenList);
     free(input);
     pushDomain();
     vmInit(); 
     parse(tokenList);
-    Instr *testCode = temaMasinaVirtuala();
-    run(testCode);
+   // Instr *testCode = temaMasinaVirtuala();
+   // run(testCode);
     //showDomain(symTable,"global");
-    dropDomain();
+    Symbol *symMain = findSymbolInDomain(symTable, "main");
+    if (!symMain) {
+        err("missing main function");
+    }
+     Instr *entryCode = NULL;
+    addInstr(&entryCode, OP_CALL)->arg.instr = symMain->fn.instr;
+    addInstr(&entryCode, OP_HALT);
+    run(entryCode);
+    //dropDomain();
     return 0;
 }

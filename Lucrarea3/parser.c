@@ -9,6 +9,7 @@
 #include "lexer.h"
 #include "utils.h"
 #include "at.h"
+#include "gc.h"
 
 Symbol *owner = NULL;
 
@@ -200,6 +201,7 @@ bool fnParam() {
 bool fnDef() {
     Type t;
     Token *start = iTk; // Salvam pozitia curenta
+	Instr *startInstr = owner ? lastInstr(owner->fn.instr) : NULL;
     if (typeBase(&t) || consume(VOID)) {
         if (consume(ID)) {
             Token *tkName = consumedTk;
@@ -219,7 +221,11 @@ bool fnDef() {
                     }
                 }
                 if (consume(RPAR)) {
+					addInstr(&fn->fn.instr, OP_ENTER);
                     if (stmCompound(false)) {
+						fn->fn.instr->arg.i = symbolsLen(fn->fn.locals); 
+                        if (fn->type.tb == TB_VOID)
+                            addInstrWithInt(&fn->fn.instr, OP_RET_VOID, symbolsLen(fn->fn.params));
                         dropDomain();
 						owner=NULL;
 						return true;
@@ -255,7 +261,12 @@ bool fnDef() {
 					}
 				}
 				if (consume(RPAR)) {
+					addInstr(&fn->fn.instr, OP_ENTER);
 					if (stmCompound(false)) {
+						fn->fn.instr->arg.i = symbolsLen(fn->fn.locals); 
+                        if (fn->type.tb == TB_VOID) {
+                            addInstrWithInt(&fn->fn.instr, OP_RET_VOID, symbolsLen(fn->fn.params));
+                        }
 						dropDomain();
 						owner=NULL;
 						return true;
@@ -271,6 +282,9 @@ bool fnDef() {
 		}
     }
     iTk = start; // Revenim la pozitia initiala
+	if (owner) {
+        delInstrAfter(startInstr);
+    }
     return false;
 }
 
@@ -294,6 +308,7 @@ bool stmCompound(bool newDomain) {
 // stm: stmCompound | IF LPAR expr RPAR stm ( ELSE stm )? | WHILE LPAR expr RPAR stm | RETURN expr? SEMICOLON | expr? SEMICOLON
 bool stm() {
     Token *start = iTk; // Salvam pozitia curenta
+	Instr *startInstr = owner ? lastInstr(owner->fn.instr) : NULL;
     Ret rCond, rExpr;
     if (stmCompound(true)) {
         return true;
@@ -305,15 +320,27 @@ bool stm() {
 					tkerr("Conditia if-ului trebuie sa fie scalar");
 				}
 				if (consume(RPAR)) {
+					addRVal(&owner->fn.instr, rCond.lval, &rCond.type);
+                    Type intType = {TB_INT, NULL, -1};
+                    insertConvIfNeeded(lastInstr(owner->fn.instr), &rCond.type, &intType);
+                    Instr *ifJF = addInstr(&owner->fn.instr, OP_JF);
 					if (stm()) {
-						if (consume(ELSE)) {
-							if (stm()) {
-								return true;
-							}
-							return false;
-						}
-						return true;
-					}
+						if (consume(ELSE)){
+                            Instr *ifJMP = addInstr(&owner->fn.instr, OP_JMP);
+                            ifJF->arg.instr = addInstr(&owner->fn.instr, OP_NOP);
+
+                            if (stm()){
+                                ifJMP->arg.instr = addInstr(&owner->fn.instr, OP_NOP);
+                            } else{
+                                tkerr("Lipseste statement-ul dupa 'else'");
+                            }
+                        } else{
+                            ifJF->arg.instr = addInstr(&owner->fn.instr, OP_NOP);
+                        }
+                        return true;
+                    } else {
+                        tkerr("Lipseste statement-ul dupa 'if'");
+                    }
 				} else {
 					tkerr("Lipseste ')' dupa expresie");
 				}
@@ -326,15 +353,24 @@ bool stm() {
 		iTk = start;
     }
     if (consume(WHILE)) {
+		Instr *beforeWhileCond = lastInstr(owner->fn.instr);
 		if (consume(LPAR)) {
 			if (expr(&rCond)) {
                 if (!canBeScalar(&rCond)) {
 					tkerr("conditia trebuie sa fie scalar");
 				}
 				if (consume(RPAR)) {
+					addRVal(&owner->fn.instr, rCond.lval, &rCond.type);
+                    Type intType = {TB_INT, NULL, -1};
+                    insertConvIfNeeded(lastInstr(owner->fn.instr), &rCond.type, &intType);
+                    Instr *whileJF = addInstr(&owner->fn.instr, OP_JF);
 					if (stm()) {
-						return true;
-					}
+                        addInstr(&owner->fn.instr, OP_JMP)->arg.instr = beforeWhileCond->next;
+                        whileJF->arg.instr = addInstr(&owner->fn.instr, OP_NOP);
+                        return true;
+                    } else{
+                        tkerr("Lipseste statement-ul dupa 'while'");
+                    }
 				} else {
 					tkerr("Lipseste ')' dupa expresie");
 				}
@@ -349,37 +385,42 @@ bool stm() {
     if (consume(RETURN)) {
         if (expr(&rExpr)) {
             if (owner->type.tb == TB_VOID) {
-				tkerr("Functiile void nu pot returna o valoare");
-			}
-			if (!canBeScalar(&rExpr)) {
-				tkerr("Valoarea returnata trebuie sa fie un scalar");
-			}
-			if (!convTo(&rExpr.type, &owner->type)) {
-				tkerr("Nu se poate converti tipul expresiei la tipul returnat de functie");
-			}
-		} else {
-			if(owner->type.tb != TB_VOID) {
-				tkerr("Functiile non-void trebuie sa aiba o expresie returnata");
-			}
-		}
-        if (consume(SEMICOLON)) {
-            return true;
+                tkerr("A void function cannot return a value");
+            }
+            if (!canBeScalar(&rExpr)) {
+                tkerr("The return value must be a scalar value");
+            }
+            if (!convTo(&rExpr.type, &owner->type)) {
+                tkerr("Cannot convert the return expression type to the function return type");
+            }
+            addRVal(&owner->fn.instr, rExpr.lval, &rExpr.type);
+            insertConvIfNeeded(lastInstr(owner->fn.instr), &rExpr.type, &owner->type);
+            addInstrWithInt(&owner->fn.instr, OP_RET, symbolsLen(owner->fn.params));
         } else {
-            tkerr("Lipseste punctul si virgula ';' dupa instructiunea return");
+            if (owner->type.tb != TB_VOID) {
+                tkerr("A non-void function must return a value");
+            }
+            addInstr(&owner->fn.instr, OP_RET_VOID);
         }
-        iTk = start;
+        if (consume(SEMICOLON)){
+            return true;
+        } else{
+            tkerr("Missing ';' after 'return'");
+        }
+    } else {
+        if (expr(&rExpr)){
+            if (rExpr.type.tb != TB_VOID){
+                addInstr(&owner->fn.instr, OP_DROP);
+            }
+        }
+        if (consume(SEMICOLON)){
+            return true;
+        }
     }
-    if (expr(&rExpr)) {
-		if (consume(SEMICOLON)) {
-			return true;
-		} else {
-			tkerr("Lipseste ';'");
-		}
-	}
-    if (consume(SEMICOLON)) {
-		return true;
-	}
-    iTk = start; // Revenim la pozitia initiala
+    iTk = start;
+    if (owner) {
+        delInstrAfter(startInstr);
+    }
     return false;
 }
 
@@ -397,6 +438,7 @@ bool expr(Ret *r) {
 bool exprAssign(Ret *r) {
     Ret rDst;
     Token *start = iTk; // Salvam pozitia curenta
+	Instr *startInstr = owner ? lastInstr(owner->fn.instr) : NULL;
     if (exprUnary(&rDst)) {
 		if (consume(ASSIGN)) {
 			if (exprAssign(r)) {
@@ -417,6 +459,17 @@ bool exprAssign(Ret *r) {
 				}
 				r->lval = false;
 				r->ct = true;
+                addRVal(&owner->fn.instr, r->lval, &r->type);
+                insertConvIfNeeded(lastInstr(owner->fn.instr), &r->type, &rDst.type);
+                switch (rDst.type.tb) {
+                    case TB_INT:
+                        addInstr(&owner->fn.instr, OP_STORE_I);
+                        break;
+                    case TB_DOUBLE:
+                        addInstr(&owner->fn.instr, OP_STORE_F);
+                        break;
+                    default : break;
+                }
                 return true;
             } else {
                 tkerr("Lipseste expresia dupa semnul =");
@@ -424,10 +477,13 @@ bool exprAssign(Ret *r) {
         }
         iTk = start;
     }
+	iTk = start;
+    if (owner) {
+        delInstrAfter(startInstr);
+    }
     if (exprOr(r)) {
         return true;
     }
-    iTk = start; // Revenim la pozitia initiala
     return false;
 }
 
@@ -523,91 +579,128 @@ bool exprPostfixPrim(Ret *r) {
 // exprPrimary: ID ( LPAR ( expr ( COMMA expr )* )? RPAR )? | INT | DOUBLE | CHAR | STRING | LPAR expr RPAR
 bool exprPrimary(Ret *r) {
    Token *start = iTk;
+   Instr *startInstr = owner ? lastInstr(owner->fn.instr) : NULL;
 	if (consume(ID)) {
-		Token *tkName = consumedTk;
-		Symbol *s = findSymbol(tkName->text);
-		if (!s) {
-			tkerr("ID-ul este nedefinit: %s", tkName->text);
-		}
-		if (consume(LPAR)) {
-			if(s->kind!=SK_FN)tkerr("Doar functiile pot fi apelate");
-			Ret rArg;
-			Symbol *param=s->fn.params;
-			if (expr(&rArg)) {
-				if (!param) {
-					tkerr("Apelul unei functii trebuie sa aiba acelasi numar de argumente ca si numarul de parametri de la definitia ei");
-				}
-				if (!convTo(&rArg.type, &param->type)) {
-					tkerr("Tipurile argumentelor de la apelul unei functii trebuie sa fie convertibile la tipurile parametrilor functiei");
-				}
-				param=param->next;
-				for (;;) {
-					if (consume(COMMA)) {
-						if (expr(&rArg)) {
-							if (!param) {
-								tkerr("Apelul unei functii trebuie sa aiba acelasi numar de argumente ca si numarul de parametri de la definitia ei");
-							}
-							if (!convTo(&rArg.type, &param->type)) {
-								tkerr("Tipurile argumentelor de la apelul unei functii trebuie sa fie convertibile la tipurile parametrilor functiei");
-							}
-							param=param->next;
-						} 
-						else {
-							tkerr("Lipseste expresia dupa ','");
-						};
-					} else break;
-				}
-			}
-			if (consume(RPAR)) {
-				if (param) {
-					tkerr("Apelul unei functii trebuie sa aiba acelasi numar de argumente ca si numarul de parametri de la definitia ei");
-				}
-				*r = (Ret){s->type,false,true};
-			} else {
-				if (s->kind == SK_FN) {
-					tkerr("O functie poate fi doar apelata");
-				}
-				*r = (Ret){s->type,true,s->type.n>=0};
-				tkerr("Lipseste ')' in apelul functiei");
-			}
-        }   else {
-			if(s->kind==SK_FN) {
-				tkerr("O functie poate fi doar apelata"); 
-			}
-			*r = (Ret){s->type,true,s->type.n>=0};
-		} 
-		return true;
-	}
-	if (consume(INT)) {
-		*r = (Ret){{TB_INT,NULL,-1},false,true};
-		return true;
-	}
-	if (consume(DOUBLE)) {
-		*r = (Ret){{TB_DOUBLE,NULL,-1},false,true};
-		return true;
-	}
-	if (consume(CHAR)) {
-		*r = (Ret){{TB_CHAR,NULL,-1},false,true};
-		return true;
-	}
-	if (consume(STRING)) {
-		*r = (Ret){{TB_CHAR,NULL,0},false,true};
-		return true;
-	}
-	if (consume(LPAR)) {
-		if (expr(r)) {
-			if (consume(RPAR)) {
-				return true;
-			} else {
-				tkerr("Lipseste ')' la finalul expresiei");
-			}
-		} else {
-			tkerr("Lipseste expresia");
-		}
-		iTk = start;
-	}
-	iTk = start;
-	return false;
+        Token *tkName = consumedTk;
+        Symbol *s = findSymbol(tkName->text);
+        if (!s) {
+            tkerr("Undefined id: %s", tkName->text);
+        }
+        if (consume(LPAR)) {
+            if (s->kind != SK_FN) {
+                tkerr("Only a function can be called");
+            }
+            Ret rArg;
+            Symbol *param = s->fn.params;
+            if (expr(&rArg)) {
+                if (!param) {
+                    tkerr("Too many arguments in function call");
+                }
+                if (!convTo(&rArg.type, &param->type)) {
+                    tkerr("In call, cannot convert the argument type to the parameter type");
+                }
+                addRVal(&owner->fn.instr, rArg.lval, &rArg.type);
+                insertConvIfNeeded(lastInstr(owner->fn.instr), &rArg.type, &param->type);
+                param = param->next;
+                for (;;) {
+                    if (consume(COMMA)) {
+                        if (expr(&rArg)) {
+                            if (!param) {
+                                tkerr("Too many arguments in function call");
+                            }
+                            if (!convTo(&rArg.type, &param->type)) {
+                                tkerr("In call, cannot convert the argument type to the parameter type");
+                            }
+                            addRVal(&owner->fn.instr, rArg.lval, &rArg.type);
+                            insertConvIfNeeded(lastInstr(owner->fn.instr), &rArg.type, &param->type);
+                            param = param->next;
+                        } else {
+                            tkerr("Missing expression after ',' in function call");
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
+            if (consume(RPAR)) {
+                if (param) {
+                    tkerr("Too few arguments in function call");
+                }
+                *r = (Ret){s->type, false, true};
+                if (s->fn.extFnPtr) {
+                    addInstr(&owner->fn.instr, OP_CALL_EXT)->arg.extFnPtr = s->fn.extFnPtr;
+                } else {
+                    addInstr(&owner->fn.instr, OP_CALL)->arg.instr = s->fn.instr;
+                }
+                return true;
+            } else {
+                tkerr("Missing ')' in function call");
+            }
+        } else {
+            if (s->kind == SK_FN) {
+                tkerr("A function can only be called");
+            }
+            *r = (Ret){s->type, true, s->type.n >= 0};
+
+            if (s->kind == SK_VAR) {
+                if (s->owner == NULL) {// global variables
+                    addInstr(&owner->fn.instr, OP_ADDR)->arg.p = s->varMem;
+                } else {// local variables
+                    switch (s->type.tb) {
+                        case TB_INT:
+                            addInstrWithInt(&owner->fn.instr, OP_FPADDR_I, s->varIdx + 1);
+                            break;
+                        case TB_DOUBLE:
+                            addInstrWithInt(&owner->fn.instr, OP_FPADDR_F, s->varIdx + 1);
+                            break;
+                        default : break;
+                    }
+                }
+            }
+
+            if (s->kind == SK_PARAM) {
+                switch (s->type.tb) {
+                    case TB_INT:
+                        addInstrWithInt(&owner->fn.instr, OP_FPADDR_I, s->paramIdx - symbolsLen(s->owner->fn.params) - 1);
+                        break;
+                    case TB_DOUBLE:
+                        addInstrWithInt(&owner->fn.instr, OP_FPADDR_F, s->paramIdx - symbolsLen(s->owner->fn.params) - 1);
+                        break;
+                    default : break;
+                }
+            }
+        }
+        return true;
+    } else if (consume(INT)) {
+        *r = (Ret){{TB_INT, NULL, -1}, false, true};
+        Token *ct = consumedTk;
+        addInstrWithInt(&owner->fn.instr, OP_PUSH_I, ct->i);
+        return true;
+    } else if (consume(DOUBLE)) {
+        *r = (Ret){{TB_DOUBLE, NULL, -1}, false, true};
+        Token *ct = consumedTk;
+        addInstrWithDouble(&owner->fn.instr, OP_PUSH_F, ct->d);
+        return true;
+    } else if (consume(CHAR)) {
+        *r = (Ret){{TB_CHAR, NULL, -1}, false, true};
+        return true;
+    } else if (consume(STRING)) {
+        *r = (Ret){{TB_CHAR, NULL, 0}, false, true};
+        return true;
+    } else if (consume(LPAR)) {
+        if (expr(r)) {
+            if (consume(RPAR)) {
+                return true;
+            } else {
+                tkerr("Missing ')' after expression");
+            }
+        }
+    }
+    iTk = start;
+    if (owner) {
+        delInstrAfter(startInstr);
+    }
+    return false;
 }
 
 // exprCast: LPAR typeBase arrayDecl? RPAR exprCast | exprUnary
@@ -654,24 +747,61 @@ bool exprCast(Ret *r) {
 
 bool exprMul(Ret *r) {
     Token *start = iTk; // Salvam pozitia curenta
+	Instr *startInstr = owner ? lastInstr(owner->fn.instr) : NULL;
     if (exprCast(r)) {
         return exprMulPrim(r);
     }
     iTk = start; // Revenim la pozitia initiala
+	if (owner) {
+        delInstrAfter(startInstr);
+    }
     return false;
 }
 
 bool exprMulPrim(Ret *r) {
     Ret right;
+	Token *op;
+	Instr *lastLeft;
     switch (iTk->code) {
         case MUL:
             consume(MUL);
+			op = consumedTk;
+        lastLeft = lastInstr(owner->fn.instr);
+        addRVal(&owner->fn.instr, r->lval, &r->type);
             if (exprCast(&right)) {
 			    Type tDst;
                  if (!arithTypeTo(&r->type, &right.type, &tDst)) {
 				    tkerr("Ambii operanzi trebuie sa fie scalari si sa nu fie structuri in operatia '*'");
 			    }
-			    *r = (Ret){tDst,false,true};
+			    addRVal(&owner->fn.instr, right.lval, &right.type);
+            insertConvIfNeeded(lastLeft, &r->type, &tDst);
+            insertConvIfNeeded(lastInstr(owner->fn.instr), &right.type, &tDst);
+            switch (op->code) {
+                case MUL:
+                    switch (tDst.tb) {
+                        case TB_INT:
+                            addInstr(&owner->fn.instr, OP_MUL_I);
+                            break;
+                        case TB_DOUBLE:
+                            addInstr(&owner->fn.instr, OP_MUL_F);
+                            break;
+                        default : break;
+                    }
+                    break;
+                case DIV:
+                    switch (tDst.tb) {
+                        case TB_INT:
+                            addInstr(&owner->fn.instr, OP_DIV_I);
+                            break;
+                        case TB_DOUBLE:
+                            addInstr(&owner->fn.instr, OP_DIV_F);
+                            break;
+                        default : break;
+                    }
+                    break;
+                default : break;
+            }
+            *r = (Ret){tDst, false, true};
                 if (exprMulPrim(r)) {
                     return true;
                 } 
@@ -681,12 +811,43 @@ bool exprMulPrim(Ret *r) {
             break;
         case DIV:
             consume(DIV);
+			op = consumedTk;
+        lastLeft = lastInstr(owner->fn.instr);
+        addRVal(&owner->fn.instr, r->lval, &r->type);
              if (exprCast(&right)) {
 			    Type tDst;
                  if (!arithTypeTo(&r->type, &right.type, &tDst)) {
 				    tkerr("Ambii operanzi trebuie sa fie scalari si sa nu fie structuri in operatia '/'");
 			    }
-			    *r = (Ret){tDst,false,true};
+			    addRVal(&owner->fn.instr, right.lval, &right.type);
+            insertConvIfNeeded(lastLeft, &r->type, &tDst);
+            insertConvIfNeeded(lastInstr(owner->fn.instr), &right.type, &tDst);
+            switch (op->code) {
+                case MUL:
+                    switch (tDst.tb) {
+                        case TB_INT:
+                            addInstr(&owner->fn.instr, OP_MUL_I);
+                            break;
+                        case TB_DOUBLE:
+                            addInstr(&owner->fn.instr, OP_MUL_F);
+                            break;
+                        default : break;
+                    }
+                    break;
+                case DIV:
+                    switch (tDst.tb) {
+                        case TB_INT:
+                            addInstr(&owner->fn.instr, OP_DIV_I);
+                            break;
+                        case TB_DOUBLE:
+                            addInstr(&owner->fn.instr, OP_DIV_F);
+                            break;
+                        default : break;
+                    }
+                    break;
+                default : break;
+            }
+            *r = (Ret){tDst, false, true};
                 if (exprMulPrim(r)) {
                     return true;
                 } 
@@ -704,25 +865,62 @@ bool exprMulPrim(Ret *r) {
 // exprAdd: exprMul exprAddPrim
 bool exprAdd(Ret *r) {
     Token *start = iTk; // Salvam pozitia curenta
+	Instr *startInstr = owner ? lastInstr(owner->fn.instr) : NULL;
     if (exprMul(r)) {
         return exprAddPrim(r);
     }
     iTk = start; // Revenim la pozitia initiala
+	if (owner) {
+        delInstrAfter(startInstr);
+    }
     return false;
 }
 
 // exprAddPrim: ( ADD | SUB ) exprMul exprAddPrim | ε
 bool exprAddPrim(Ret *r) {
     Ret right;
+	Token *op;
+	Instr *lastLeft;
     switch (iTk->code) {
         case ADD:
             consume(ADD);
+			op = consumedTk;
+        lastLeft = lastInstr(owner->fn.instr);
+        addRVal (&owner->fn.instr, r->lval, &r->type);
             if (exprMul(&right)) {
 			    Type tDst;
                 if (!arithTypeTo(&r->type, &right.type, &tDst)) {
 				    tkerr("Ambii operanzi trebuie sa fie scalari si sa nu fie structuri in operatia '+'");
 			    }
-			    *r = (Ret){tDst,false,true};
+			    addRVal(&owner->fn.instr, right.lval, &right.type);
+            insertConvIfNeeded(lastLeft, &r->type, &tDst);
+            insertConvIfNeeded(lastInstr(owner->fn.instr), &right.type, &tDst);
+            switch (op->code){
+                case ADD:
+                    switch (tDst.tb){
+                        case TB_INT:
+                            addInstr(&owner->fn.instr, OP_ADD_I);
+                            break;
+                        case TB_DOUBLE:
+                            addInstr(&owner->fn.instr, OP_ADD_F);
+                            break;
+                        default : break;
+                    }
+                    break;
+                case SUB:
+                    switch (tDst.tb){
+                        case TB_INT:
+                            addInstr(&owner->fn.instr, OP_SUB_I);
+                            break;
+                        case TB_DOUBLE:
+                            addInstr(&owner->fn.instr, OP_SUB_F);
+                            break;
+                        default : break;
+                    }
+                    break;
+                default : break;
+            }
+            *r = (Ret){tDst, false, true};
                 if (exprAddPrim(r)) {
                     return true;
                 } 
@@ -732,12 +930,43 @@ bool exprAddPrim(Ret *r) {
             break;
         case SUB:
             consume(SUB);
+			op = consumedTk;
+        lastLeft = lastInstr(owner->fn.instr);
+        addRVal (&owner->fn.instr, r->lval, &r->type);
              if (exprMul(&right)) {
 			    Type tDst;
                 if (!arithTypeTo(&r->type, &right.type, &tDst)) {
 				    tkerr("Ambii operanzi trebuie sa fie scalari si sa nu fie structuri in operatia '-'");
 			    }
-			    *r = (Ret){tDst,false,true};
+			    addRVal(&owner->fn.instr, right.lval, &right.type);
+            insertConvIfNeeded(lastLeft, &r->type, &tDst);
+            insertConvIfNeeded(lastInstr(owner->fn.instr), &right.type, &tDst);
+            switch (op->code){
+                case ADD:
+                    switch (tDst.tb){
+                        case TB_INT:
+                            addInstr(&owner->fn.instr, OP_ADD_I);
+                            break;
+                        case TB_DOUBLE:
+                            addInstr(&owner->fn.instr, OP_ADD_F);
+                            break;
+                        default : break;
+                    }
+                    break;
+                case SUB:
+                    switch (tDst.tb){
+                        case TB_INT:
+                            addInstr(&owner->fn.instr, OP_SUB_I);
+                            break;
+                        case TB_DOUBLE:
+                            addInstr(&owner->fn.instr, OP_SUB_F);
+                            break;
+                        default : break;
+                    }
+                    break;
+                default : break;
+            }
+            *r = (Ret){tDst, false, true};
                 if (exprAddPrim(r)) {
                     return true;
                 } 
@@ -755,25 +984,52 @@ bool exprAddPrim(Ret *r) {
 // exprRel: exprAdd exprRelPrim
 bool exprRel(Ret *r) {
     Token *start = iTk; // Salvam pozitia curenta
+	Instr *startInstr = owner ? lastInstr(owner->fn.instr) : NULL;
     if (exprAdd(r)) {
         return exprRelPrim(r);
     }
-    iTk = start; // Revenim la pozitia initiala
+     iTk = start;
+    if (owner) {
+        delInstrAfter(startInstr);
+    }
     return false;
 }
 
 // exprRelPrim: ( LESS | LESSEQ | GREATER | GREATEREQ ) exprAdd exprRelPrim | ε
 bool exprRelPrim(Ret *r) {
+	Token *op;
     Ret right;
+	Instr *lastLeft;
     switch (iTk->code) {
         case LESS:
             consume(LESS);
+			op = consumedTk;
+        lastLeft = lastInstr(owner->fn.instr);
+        addRVal(&owner->fn.instr, r->lval, &r->type);
 		    if (exprAdd(&right)) {
 			    Type tDst;
                  if (!arithTypeTo(&r->type, &right.type, &tDst)) {
 				    tkerr("Ambii operanzi trebuie sa fie scalari si sa nu fie structuri in operatia '<'");
 			    }
-			    *r = (Ret){{TB_INT,NULL,-1},false,true};
+			    addRVal(&owner->fn.instr, right.lval, &right.type);
+            insertConvIfNeeded(lastLeft, &r->type, &tDst);
+            insertConvIfNeeded(lastInstr(owner->fn.instr), &right.type, &tDst);
+            switch (op->code){
+                case LESS:
+                    switch (tDst.tb){
+                        case TB_INT:
+                            addInstr(&owner->fn.instr, OP_LESS_I);
+                            break;
+                        case TB_DOUBLE:
+                            addInstr(&owner->fn.instr, OP_LESS_F);
+                            break;
+                        default : break;
+                    }
+                    break;
+                default : break;
+            }
+
+            *r = (Ret){{TB_INT, NULL, -1}, false, true};
                 if (exprRelPrim(r)) {
                     return true;
                 }
@@ -783,12 +1039,33 @@ bool exprRelPrim(Ret *r) {
             break;
         case LESSEQ:
             consume(LESSEQ);
+			op = consumedTk;
+        lastLeft = lastInstr(owner->fn.instr);
+        addRVal(&owner->fn.instr, r->lval, &r->type);
             if (exprAdd(&right)) {
 			    Type tDst;
                  if (!arithTypeTo(&r->type, &right.type, &tDst)) {
 				    tkerr("Ambii operanzi trebuie sa fie scalari si sa nu fie structuri in operatia '<='");
 			    }
-			    *r = (Ret){{TB_INT,NULL,-1},false,true};
+			    addRVal(&owner->fn.instr, right.lval, &right.type);
+            insertConvIfNeeded(lastLeft, &r->type, &tDst);
+            insertConvIfNeeded(lastInstr(owner->fn.instr), &right.type, &tDst);
+            switch (op->code){
+                case LESS:
+                    switch (tDst.tb){
+                        case TB_INT:
+                            addInstr(&owner->fn.instr, OP_LESS_I);
+                            break;
+                        case TB_DOUBLE:
+                            addInstr(&owner->fn.instr, OP_LESS_F);
+                            break;
+                        default : break;
+                    }
+                    break;
+                default : break;
+            }
+
+            *r = (Ret){{TB_INT, NULL, -1}, false, true};
                 if (exprRelPrim(r)) {
                     return true;
                 } 
@@ -798,12 +1075,33 @@ bool exprRelPrim(Ret *r) {
             break;
         case GREATER:
             consume(GREATER);
+			op = consumedTk;
+        lastLeft = lastInstr(owner->fn.instr);
+        addRVal(&owner->fn.instr, r->lval, &r->type);
              if (exprAdd(&right)) {
 			    Type tDst;
                  if (!arithTypeTo(&r->type, &right.type, &tDst)) {
 				    tkerr("Ambii operanzi trebuie sa fie scalari si sa nu fie structuri in operatia '>'");
 			    }
-			    *r = (Ret){{TB_INT,NULL,-1},false,true};
+			    addRVal(&owner->fn.instr, right.lval, &right.type);
+            insertConvIfNeeded(lastLeft, &r->type, &tDst);
+            insertConvIfNeeded(lastInstr(owner->fn.instr), &right.type, &tDst);
+            switch (op->code){
+                case LESS:
+                    switch (tDst.tb){
+                        case TB_INT:
+                            addInstr(&owner->fn.instr, OP_LESS_I);
+                            break;
+                        case TB_DOUBLE:
+                            addInstr(&owner->fn.instr, OP_LESS_F);
+                            break;
+                        default : break;
+                    }
+                    break;
+                default : break;
+            }
+
+            *r = (Ret){{TB_INT, NULL, -1}, false, true};
                 if (exprRelPrim(r)) {
                     return true;
                 } 
@@ -812,13 +1110,34 @@ bool exprRelPrim(Ret *r) {
             }
             break;
         case GREATEREQ:
+		op = consumedTk;
+        lastLeft = lastInstr(owner->fn.instr);
+        addRVal(&owner->fn.instr, r->lval, &r->type);
             consume(GREATEREQ);
              if (exprAdd(&right)) {
 			    Type tDst;
                  if (!arithTypeTo(&r->type, &right.type, &tDst)) {
 				    tkerr("Ambii operanzi trebuie sa fie scalari si sa nu fie structuri in operatia '>='");
 			    }
-			    *r = (Ret){{TB_INT,NULL,-1},false,true};
+			    addRVal(&owner->fn.instr, right.lval, &right.type);
+            insertConvIfNeeded(lastLeft, &r->type, &tDst);
+            insertConvIfNeeded(lastInstr(owner->fn.instr), &right.type, &tDst);
+            switch (op->code){
+                case LESS:
+                    switch (tDst.tb){
+                        case TB_INT:
+                            addInstr(&owner->fn.instr, OP_LESS_I);
+                            break;
+                        case TB_DOUBLE:
+                            addInstr(&owner->fn.instr, OP_LESS_F);
+                            break;
+                        default : break;
+                    }
+                    break;
+                default : break;
+            }
+
+            *r = (Ret){{TB_INT, NULL, -1}, false, true};
                 if (exprRelPrim(r)) {
                     return true;
                 } 
